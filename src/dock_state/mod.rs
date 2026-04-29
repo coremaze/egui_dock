@@ -332,6 +332,69 @@ impl<Tab> DockState<Tab> {
         }
     }
 
+    /// Moves all tabs of a leaf node to another location.
+    /// You need to specify with [`TabDestination`] how the node should be moved.
+    pub fn move_node(&mut self, src: NodePath, dst: impl Into<TabDestination>) {
+        let dst = dst.into();
+
+        // Moving a node to itself is always a no-op.
+        if let TabDestination::Node(dst_path, _) = &dst {
+            if *dst_path == src {
+                return;
+            }
+        }
+
+        // Take all tabs from the source leaf.
+        let tabs = match self.leaf_mut(src) {
+            Ok(leaf) => std::mem::take(&mut leaf.tabs),
+            Err(_) => return,
+        };
+
+        if tabs.is_empty() {
+            return;
+        }
+
+        match dst {
+            TabDestination::Window(rect) => {
+                let surface_index = self.add_window(tabs);
+                let state = self.get_window_state_mut(surface_index).unwrap();
+                state.set_position(rect.min);
+                if src.surface.is_main() {
+                    state.set_size(rect.size() * 0.8);
+                } else {
+                    state.set_size(rect.size());
+                }
+            }
+            TabDestination::Node(dst_path, insert) => match insert {
+                TabInsert::Split(split) => {
+                    self[dst_path.surface].split(dst_path.node, split, 0.5, Node::leaf_with(tabs));
+                }
+                TabInsert::Append | TabInsert::Insert(_) => {
+                    let leaf = self[dst_path.surface][dst_path.node]
+                        .get_leaf_mut()
+                        .expect("move_node destination must be a leaf");
+                    for tab in tabs {
+                        leaf.tabs.push(tab);
+                    }
+                    if !leaf.tabs.is_empty() {
+                        leaf.active = TabIndex(leaf.tabs.len() - 1);
+                    }
+                }
+            },
+            TabDestination::EmptySurface(surface) => {
+                self[surface] = Tree::new(tabs);
+            }
+        }
+
+        // Clean up the now-empty source leaf.
+        if self[src].is_leaf() && self[src].tabs_count() == 0 {
+            self[src.surface].remove_leaf(src.node);
+        }
+        if self[src.surface].is_empty() && !src.surface.is_main() {
+            self.remove_surface(src.surface);
+        }
+    }
+
     /// Takes a tab out of its current surface and puts it in a new window.
     /// Returns the surface index of the new window.
     pub fn detach_tab(&mut self, src: TabPath, window_rect: Rect) -> SurfaceIndex {

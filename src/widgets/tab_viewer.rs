@@ -106,6 +106,14 @@ pub trait TabViewer {
     fn scroll_bars(&self, _tab: &Self::Tab) -> [bool; 2] {
         [true, true]
     }
+
+    /// When this tab is the sole tab in its leaf, whether to hide the tab bar
+    /// and let the content occupy the full area.
+    ///
+    /// Returns `false` by default.
+    fn solo_tab_no_bar(&self, _tab: &Self::Tab) -> bool {
+        false
+    }
 }
 
 /// Determines what happens to a tab when a user attempts to close it.

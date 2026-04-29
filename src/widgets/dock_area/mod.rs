@@ -35,6 +35,7 @@ pub struct DockArea<'tree, Tab> {
     secondary_button_on_modifier: bool,
     secondary_button_context_menu: bool,
     allowed_splits: AllowedSplits,
+    multi_row_tabs: bool,
     window_bounds: Option<Rect>,
 
     to_remove: Vec<TabRemoval>,
@@ -59,6 +60,7 @@ impl<'tree, Tab> DockArea<'tree, Tab> {
             draggable_tabs: true,
             show_tab_name_on_hover: false,
             allowed_splits: AllowedSplits::default(),
+            multi_row_tabs: false,
             to_remove: Vec::new(),
             to_detach: Vec::new(),
             new_focused: None,
@@ -128,6 +130,15 @@ impl<'tree, Tab> DockArea<'tree, Tab> {
     /// By default it's `false`.
     pub fn show_tab_name_on_hover(mut self, show_tab_name_on_hover: bool) -> Self {
         self.show_tab_name_on_hover = show_tab_name_on_hover;
+        self
+    }
+
+    /// When enabled, a leaf whose tabs would overflow into a scroll bar instead wraps
+    /// tabs onto multiple rows. A blank drag strip (same height as one tab row) is placed
+    /// above the tab rows and acts as the node group drag handle.
+    /// By default it's `false`.
+    pub fn multi_row_tabs(mut self, multi_row_tabs: bool) -> Self {
+        self.multi_row_tabs = multi_row_tabs;
         self
     }
 

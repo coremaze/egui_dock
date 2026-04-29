@@ -75,15 +75,17 @@ impl<Tab> DockArea<'_, Tab> {
             let tab_dst = self.show_drag_drop_overlay(ui, &mut state, tab_viewer);
             if ui.input(|i| i.pointer.primary_released()) {
                 if let Some(destination) = tab_dst {
-                    let source = {
-                        match state.dnd.as_ref().unwrap().drag.src {
-                            TreeComponent::Tab(src) => src,
-                            _ => todo!(
-                                "collections of tabs, like nodes and surfaces can't be docked (yet)"
-                            ),
+                    match state.dnd.as_ref().unwrap().drag.src {
+                        TreeComponent::Tab(src) => {
+                            self.dock_state.move_tab(src, destination);
                         }
-                    };
-                    self.dock_state.move_tab(source, destination);
+                        TreeComponent::Node(src) => {
+                            self.dock_state.move_node(src, destination);
+                        }
+                        TreeComponent::Surface(_) => {
+                            todo!("surface dragging not yet supported")
+                        }
+                    }
                 }
             }
         }
@@ -226,7 +228,8 @@ impl<Tab> DockArea<'_, Tab> {
                 ((src_surf, Some(src_node)), (dst_surf, Some(dst_node))) => {
                     src_surf == dst_surf
                         && src_node == dst_node
-                        && self.dock_state[src_surf][src_node].tabs_count() == 1
+                        && (self.dock_state[src_surf][src_node].tabs_count() == 1
+                            || matches!(&drag_state.drag.src, TreeComponent::Node(_)))
                 }
                 _ => false,
             }
@@ -247,7 +250,12 @@ impl<Tab> DockArea<'_, Tab> {
                 };
                 tab_viewer.allowed_in_windows(&mut leaf.tabs[path.tab.0])
             }
-            _ => todo!("collections of tabs, like nodes or surfaces, can't be dragged! (yet)"),
+            TreeComponent::Node(path) => self.dock_state[path].get_leaf_mut().is_some_and(|leaf| {
+                leaf.tabs
+                    .iter_mut()
+                    .all(|tab| tab_viewer.allowed_in_windows(tab))
+            }),
+            TreeComponent::Surface(_) => unreachable!("surface drags not supported"),
         };
 
         if let Some(pointer) = state.last_hover_pos {
