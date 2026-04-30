@@ -112,23 +112,22 @@ impl<Tab> DockArea<'_, Tab> {
                 let style = fade_style.unwrap_or_else(|| self.style.as_ref().unwrap());
                 style.tab_bar.inner_margin.sum().x
             };
-            let mut button_widths = 0.0_f32;
-            if self.show_add_buttons {
-                button_widths += Style::TAB_ADD_BUTTON_SIZE;
-            }
-            if self.show_leaf_close_all_buttons {
-                button_widths += Style::TAB_CLOSE_ALL_BUTTON_SIZE;
-            }
-            if self.show_leaf_collapse_buttons {
-                button_widths += Style::TAB_COLLAPSE_BUTTON_SIZE;
-            }
-            let available_for_tabs = ui.available_width() - inner_margin_h - button_widths;
-            if available_for_tabs > 0.0 {
+            // Tab rows use the full inner width; toolbar controls sit on the drag strip only, so
+            // do not subtract their width when deciding how many tabs fit per row.
+            let inner_tab_row_width = (ui.available_width() - inner_margin_h).max(0.0);
+            if inner_tab_row_width > 0.0 {
                 let tab_layout = self.compute_tab_layout(ui, path, tab_viewer, fade_style);
-                let row_ranges = distribute_tabs_for_width(&tab_layout, available_for_tabs);
+                let row_ranges = distribute_tabs_for_width(&tab_layout, inner_tab_row_width);
                 if row_ranges.len() >= 2 {
                     return self.tab_bar_multi_row(
-                        ui, state, path, tab_viewer, fade_style, collapsed, row_ranges,
+                        ui,
+                        state,
+                        path,
+                        tab_viewer,
+                        fade_style,
+                        collapsed,
+                        &tab_layout,
+                        row_ranges,
                     );
                 }
             }
@@ -205,12 +204,11 @@ impl<Tab> DockArea<'_, Tab> {
             }
             tabs_ui.set_clip_rect(clip_rect);
 
-            // Desired size for tabs in "expanded" mode.
+            // fill_tab_bar: split extra horizontal space evenly across tabs (same slack, not same width).
             let tabs_len = leaf.tabs.len();
-            let prefered_width = style
-                .tab_bar
-                .fill_tab_bar
-                .then_some(available_width / tabs_len as f32);
+            let tab_layout_fill = (style.tab_bar.fill_tab_bar && tabs_len > 0)
+                .then(|| self.compute_tab_layout(ui, path, tab_viewer, fade_style));
+            let fill_row_width = tab_layout_fill.as_ref().map(|_| available_width);
 
             let tab_hovered = self.tabs(
                 tabs_ui,
@@ -218,7 +216,8 @@ impl<Tab> DockArea<'_, Tab> {
                 path,
                 tab_viewer,
                 tabbar_outer_rect,
-                prefered_width,
+                tab_layout_fill.as_deref(),
+                fill_row_width,
                 fade_style,
                 0..tabs_len,
             );
@@ -342,6 +341,15 @@ impl<Tab> DockArea<'_, Tab> {
         tabbar_outer_rect
     }
 
+    /// Renders a contiguous range of tabs.
+    ///
+    /// When `tab_layout` and `fill_row_width` are both set, widths come from
+    /// [`compute_tab_widths_for_row`] (equal slack on top of each tab's minimum). Otherwise each
+    /// tab uses its natural minimum width (see [`Self::tab_title`]).
+    ///
+    /// `tab_layout` is `(min_width, gap_before_this_tab)` per index from [`Self::compute_tab_layout`].
+    /// `fill_row_width` is the clip width for this row; use `Some` together with `tab_layout`, or
+    /// `None` for both.
     #[allow(clippy::too_many_arguments)]
     fn tabs(
         &mut self,
@@ -350,7 +358,8 @@ impl<Tab> DockArea<'_, Tab> {
         path: NodePath,
         tab_viewer: &mut impl TabViewer<Tab = Tab>,
         tabbar_outer_rect: Rect,
-        preferred_width: Option<f32>,
+        tab_layout: Option<&[(f32, f32)]>,
+        fill_row_width: Option<f32>,
         fade: Option<&Style>,
         tab_range: Range<usize>,
     ) -> bool {
@@ -360,6 +369,13 @@ impl<Tab> DockArea<'_, Tab> {
 
         let focused = self.dock_state.focused_leaf();
         let range_start = tab_range.start;
+
+        let row_target_widths = match (tab_layout, fill_row_width) {
+            (Some(layout), Some(row_w)) => {
+                Some(compute_tab_widths_for_row(row_w, layout, &tab_range))
+            }
+            _ => None,
+        };
 
         for tab_index in tab_range {
             let id = self
@@ -392,6 +408,10 @@ impl<Tab> DockArea<'_, Tab> {
 
             let show_close_button = self.show_close_buttons && closeable;
 
+            let target_width = row_target_widths
+                .as_ref()
+                .map(|w| w[tab_index.0 - range_start]);
+
             let (response, title_id) = if is_being_dragged {
                 let layer_id = LayerId::new(Order::Tooltip, id);
                 let response = tabs_ui
@@ -404,7 +424,7 @@ impl<Tab> DockArea<'_, Tab> {
                             is_active && Some(path) == focused,
                             is_active,
                             is_being_dragged,
-                            preferred_width,
+                            target_width,
                             show_close_button,
                             fade,
                         )
@@ -448,7 +468,7 @@ impl<Tab> DockArea<'_, Tab> {
                     is_active && Some(path) == focused,
                     is_active,
                     is_being_dragged,
-                    preferred_width,
+                    target_width,
                     show_close_button,
                     fade,
                 );
@@ -1016,6 +1036,8 @@ impl<Tab> DockArea<'_, Tab> {
 
     /// * `active` means "the tab that is opened in the parent panel".
     /// * `focused` means "the tab that was last interacted with".
+    /// * `target_width` - if set, this width is used exactly (may be below the label minimum when
+    ///   the row is squeezed); if `None`, the tab uses its natural minimum width.
     ///
     /// Returns the main button response plus the response of the close button, if any.
     #[allow(clippy::too_many_arguments)]
@@ -1028,7 +1050,7 @@ impl<Tab> DockArea<'_, Tab> {
         focused: bool,
         active: bool,
         is_being_dragged: bool,
-        preferred_width: Option<f32>,
+        target_width: Option<f32>,
         show_close_button: bool,
         fade: Option<&Style>,
     ) -> (Response, Option<Response>) {
@@ -1042,12 +1064,15 @@ impl<Tab> DockArea<'_, Tab> {
             0.0
         };
 
-        // Compute total width of the tab bar.
+        // Minimum width so the label and optional close control fit.
         let minimum_width = tab_style
             .minimum_width
             .unwrap_or(0.0)
             .at_least(text_width + close_button_size);
-        let tab_width = preferred_width.unwrap_or(0.0).at_least(minimum_width);
+        let tab_width = match target_width {
+            None => minimum_width,
+            Some(w) => w.max(0.0),
+        };
 
         let (_, tab_rect) = ui.allocate_space(vec2(tab_width, ui.available_height().max(0.0)));
         let mut response = ui.interact(tab_rect, id, Sense::click_and_drag());
@@ -1162,6 +1187,7 @@ impl<Tab> DockArea<'_, Tab> {
         tab_viewer: &mut impl TabViewer<Tab = Tab>,
         fade_style: Option<&Style>,
         collapsed: bool,
+        tab_layout: &[(f32, f32)],
         row_ranges: Vec<Range<usize>>,
     ) -> Rect {
         let style = fade_style.unwrap_or_else(|| self.style.as_ref().unwrap());
@@ -1274,9 +1300,6 @@ impl<Tab> DockArea<'_, Tab> {
                 pos2(inner_rect.min.x, row_top),
                 vec2(inner_width, row_height),
             );
-            let tabs_in_row = range.len();
-            let preferred_width = (tabs_in_row > 0).then_some(inner_width / tabs_in_row as f32);
-
             let tabs_ui = &mut ui.new_child(
                 UiBuilder::new()
                     .max_rect(row_rect)
@@ -1291,7 +1314,8 @@ impl<Tab> DockArea<'_, Tab> {
                 path,
                 tab_viewer,
                 row_rect,
-                preferred_width,
+                Some(tab_layout),
+                Some(inner_width),
                 fade_style,
                 range.clone(),
             );
@@ -1308,6 +1332,8 @@ impl<Tab> DockArea<'_, Tab> {
         outer_rect
     }
 
+    /// One entry per tab: `(min_width, horizontal_gap_before_this_tab)`.
+    /// The gap matches `allocate_space(spacing)` before each tab after the first in a row.
     fn compute_tab_layout(
         &mut self,
         ui: &Ui,
@@ -1601,7 +1627,59 @@ impl<Tab> DockArea<'_, Tab> {
     }
 }
 
-/// Wraps tabs into contiguous rows based on each tab's minimum width.
+/// Near-equality when comparing available tab space (`content`) to the sum of minimum widths.
+const TAB_ROW_SUM_EPSILON: f32 = 1e-3;
+
+/// Sum of inter-tab gaps for `range`: spacing before each tab after the first (same rule as `tabs()`).
+fn row_gap_sum(tab_layout: &[(f32, f32)], range: &Range<usize>) -> f32 {
+    if range.len() <= 1 {
+        return 0.0;
+    }
+    tab_layout[range.start + 1..range.end]
+        .iter()
+        .map(|(_, spacing)| *spacing)
+        .sum()
+}
+
+/// Per-tab widths for one row: each tab gets its minimum plus an equal share of leftover space.
+/// If the row is too narrow, widths shrink proportionally. A final scale removes float overshoot.
+fn compute_tab_widths_for_row(
+    row_width: f32,
+    tab_layout: &[(f32, f32)],
+    range: &Range<usize>,
+) -> Vec<f32> {
+    let n = range.len();
+    if n == 0 {
+        return vec![];
+    }
+    let gap_sum = row_gap_sum(tab_layout, range);
+    let content = (row_width - gap_sum).max(0.0);
+    let mins: Vec<f32> = tab_layout[range.clone()].iter().map(|(m, _)| *m).collect();
+    let sum_min: f32 = mins.iter().sum();
+
+    let mut widths: Vec<f32> = if content + TAB_ROW_SUM_EPSILON >= sum_min {
+        let slack = (content - sum_min).max(0.0);
+        let extra = slack / n as f32;
+        mins.iter().map(|m| m + extra).collect()
+    } else if sum_min > 0.0 {
+        let scale = content / sum_min;
+        mins.iter().map(|m| m * scale).collect()
+    } else {
+        vec![0.0; n]
+    };
+
+    let total: f32 = widths.iter().sum();
+    if total > content && total > 0.0 {
+        let s = content / total;
+        for w in &mut widths {
+            *w *= s;
+        }
+    }
+
+    widths
+}
+
+/// Wraps tabs into rows; each row's minimum width includes inter-tab spacing (same as `tabs()`).
 fn distribute_tabs_for_width(tab_layout: &[(f32, f32)], available_width: f32) -> Vec<Range<usize>> {
     if tab_layout.is_empty() {
         return vec![];
@@ -1618,7 +1696,7 @@ fn distribute_tabs_for_width(tab_layout: &[(f32, f32)], available_width: f32) ->
             spacing + min_width
         };
 
-        if idx > row_start && row_width + additional > available_width + 1.0 {
+        if idx > row_start && row_width + additional > available_width {
             result.push(row_start..idx);
             row_start = idx;
             row_width = min_width;
