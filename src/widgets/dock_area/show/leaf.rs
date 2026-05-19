@@ -1517,10 +1517,16 @@ impl<Tab> DockArea<'_, Tab> {
 
                 let tabs_style = tabs_styles.as_ref().unwrap_or(&style.tab);
 
+                let mut tab_body_corner_radius = tabs_style.tab_body.corner_radius;
+                if tabbar_rect != Rect::NOTHING {
+                    tab_body_corner_radius.nw = 0;
+                    tab_body_corner_radius.ne = 0;
+                }
+
                 if tab_viewer.clear_background(tab) {
                     ui.painter().rect_filled(
                         body_rect,
-                        tabs_style.tab_body.corner_radius,
+                        tab_body_corner_radius,
                         tabs_style.tab_body.bg_fill,
                     );
                 }
@@ -1552,7 +1558,7 @@ impl<Tab> DockArea<'_, Tab> {
                 );
                 ui.painter().rect_stroke(
                     rect_stroke_box(tab_body_rect, tabs_style.tab_body.stroke.width),
-                    tabs_style.tab_body.corner_radius,
+                    tab_body_corner_radius,
                     tabs_style.tab_body.stroke,
                     StrokeKind::Inside,
                 );

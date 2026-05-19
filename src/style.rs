@@ -254,7 +254,9 @@ pub struct TabBodyStyle {
     /// The stroke of the tabs border. By `Default` it's ['Stroke::default'].
     pub stroke: Stroke,
 
-    /// Tab corner radius. By `Default` it's [`CornerRadius::default`].
+    /// Tab body corner radius. By `Default` it's [`CornerRadius::default`].
+    ///
+    /// The north-west and north-east radii are ignored while a tab bar is shown above the body.
     pub corner_radius: CornerRadius,
 
     /// Colour of the tab's background. By `Default` it's [`Color32::WHITE`].
