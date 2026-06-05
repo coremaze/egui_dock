@@ -31,7 +31,7 @@ use egui::ahash::HashSet;
 use egui::Rect;
 pub use node::LeafNode;
 pub use node::Node;
-pub use node::SplitNode;
+pub use node::{FixedChild, FixedSize, SplitNode};
 pub use node_index::{NodeIndex, NodePath};
 pub use tab_index::{TabIndex, TabPath};
 pub use tab_iter::TabIter;
@@ -958,6 +958,45 @@ impl<Tab> Tree<Tab> {
         }
         None
     }
+
+    /// Make the split at `node` keep one child at a fixed pixel size along the
+    /// split axis, instead of a fixed fraction of the parent.
+    ///
+    /// The [`fraction`](SplitNode::fraction) is re-derived from `points` on every
+    /// layout, so the child holds its size as the parent resizes while the other
+    /// child absorbs the slack; dragging the separator updates `points`, so the
+    /// split stays draggable. See [`SplitNode::fixed`].
+    ///
+    /// Returns `false` (and does nothing) if `node` is out of range or is not a
+    /// split (i.e. neither [`Node::Horizontal`] nor [`Node::Vertical`]).
+    pub fn set_split_fixed_size(
+        &mut self,
+        node: NodeIndex,
+        child: FixedChild,
+        points: f32,
+    ) -> bool {
+        match self.nodes.get_mut(node.0) {
+            Some(Node::Horizontal(split) | Node::Vertical(split)) => {
+                split.fixed = Some(FixedSize { child, points });
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Remove a fixed-size constraint previously set with
+    /// [`set_split_fixed_size`](Self::set_split_fixed_size), returning the split
+    /// at `node` to proportional sizing. The current fraction is kept, so the
+    /// child does not jump. Returns `false` if `node` is not a split.
+    pub fn clear_split_fixed_size(&mut self, node: NodeIndex) -> bool {
+        match self.nodes.get_mut(node.0) {
+            Some(Node::Horizontal(split) | Node::Vertical(split)) => {
+                split.fixed = None;
+                true
+            }
+            _ => false,
+        }
+    }
 }
 
 impl<Tab> Tree<Tab>
@@ -973,6 +1012,28 @@ where
     /// In case there are several hits, only the first is returned.
     pub fn find_tab(&self, needle_tab: &Tab) -> Option<(NodeIndex, TabIndex)> {
         self.find_tab_from(|tab| tab == needle_tab)
+    }
+
+    /// Pin the leaf currently holding `needle_tab` to a fixed pixel size along
+    /// its parent split's axis.
+    ///
+    /// Convenience wrapper over
+    /// [`set_split_fixed_size`](Self::set_split_fixed_size): it locates the leaf,
+    /// then fixes whichever child of the parent split that leaf is. Returns
+    /// `false` if the tab is not found or its leaf is the root (no parent split).
+    pub fn set_fixed_tab_size(&mut self, needle_tab: &Tab, points: f32) -> bool {
+        let Some((node, _)) = self.find_tab(needle_tab) else {
+            return false;
+        };
+        let Some(parent) = node.parent() else {
+            return false;
+        };
+        let child = if node.is_left() {
+            FixedChild::First
+        } else {
+            FixedChild::Second
+        };
+        self.set_split_fixed_size(parent, child, points)
     }
 }
 

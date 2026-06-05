@@ -5,7 +5,7 @@ use crate::{Split, TabIndex};
 mod leaf;
 mod split;
 pub use leaf::LeafNode;
-pub use split::SplitNode;
+pub use split::{FixedChild, FixedSize, SplitNode};
 
 /// Represents an abstract node of a [`Tree`](crate::Tree).
 #[derive(Clone, Debug)]

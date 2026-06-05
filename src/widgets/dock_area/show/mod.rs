@@ -11,8 +11,8 @@ use crate::tab_viewer::OnCloseResponse;
 use crate::NodePath;
 use crate::{
     utils::{expand_to_pixel, fade_dock_style, map_to_pixel},
-    AllowedSplits, DockArea, Node, NodeIndex, OverlayType, Style, SurfaceIndex, TabDestination,
-    TabViewer,
+    AllowedSplits, DockArea, FixedChild, Node, NodeIndex, OverlayType, Style, SurfaceIndex,
+    TabDestination, TabViewer,
 };
 
 mod leaf;
@@ -447,6 +447,14 @@ impl<Tab> DockArea<'_, Tab> {
                 let rect = expand_to_pixel(rect, pixels_per_point);
 
                 let dim_size = rect.dim_size();
+                // A fixed-size child keeps a constant pixel size as the split
+                // resizes: re-derive the fraction from it for this extent before
+                // it drives the layout. See `SplitNode::fixed`.
+                if dim_size > 0.0 {
+                    if let Some(fixed) = split.fixed {
+                        split.fraction = fixed.fraction_for(dim_size);
+                    }
+                }
                 let midpoint = if dim_size > 0.0 {
                     rect.min.dim_point + dim_size * split.fraction
                 } else {
@@ -575,6 +583,23 @@ impl<Tab> DockArea<'_, Tab> {
 
                 if response.double_clicked() {
                     split.fraction = 0.5;
+                }
+
+                // Keep a fixed-size child's target in step with a manual resize:
+                // a drag, arrow-key nudge, or double-click reset becomes the new
+                // fixed size, so the next layout doesn't snap it back. See
+                // `SplitNode::fixed`.
+                if response.dragged() || response.double_clicked() || arrow_key_offset.is_some() {
+                    if let Some(fixed) = &mut split.fixed {
+                        let range = rect.max.dim_point - rect.min.dim_point;
+                        if range > 0.0 {
+                            let child_fraction = match fixed.child {
+                                FixedChild::First => split.fraction,
+                                FixedChild::Second => 1.0 - split.fraction,
+                            };
+                            fixed.points = child_fraction * range;
+                        }
+                    }
                 }
             }
         }
