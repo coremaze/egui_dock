@@ -42,6 +42,18 @@ pub struct DockArea<'tree, Tab> {
     to_detach: Vec<TabPath>,
     new_focused: Option<NodePath>,
     tab_hover_rect: Option<(Rect, TabIndex)>,
+
+    /// Per-leaf, set while drawing it: whether the active tab and the body are stroked as one
+    /// continuous silhouette (so there is no seam between them and no stroke-meets-stroke corners
+    /// to over-fill at fractional DPI). True for single-row leaves. False for multi-row / no tab
+    /// bar, where each tab is its own box and the body draws its sides + bottom separately (its top
+    /// edge being the last tab row's separator).
+    body_owns_top_border: bool,
+    /// Per-leaf: the active tab's screen-space rect, recorded while drawing the tab bar so the body
+    /// can trace the combined tab + body outline (see `tab_body`). `None` when no tab merges into
+    /// the body: multi-row, an active tab that opts into an hline beneath its name, or an active tab
+    /// that is being dragged out.
+    active_tab_rect: Option<Rect>,
 }
 
 // Builder
@@ -65,6 +77,8 @@ impl<'tree, Tab> DockArea<'tree, Tab> {
             to_detach: Vec::new(),
             new_focused: None,
             tab_hover_rect: None,
+            body_owns_top_border: false,
+            active_tab_rect: None,
             window_bounds: None,
             show_window_close_buttons: true,
             show_window_collapse_buttons: true,

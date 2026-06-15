@@ -1,10 +1,11 @@
-use std::ops::{Range, RangeInclusive};
+use std::ops::Range;
 
 use egui::{
-    emath::TSTransform, epaint::TextShape, lerp, pos2, vec2, Align, Align2, Button, Color32,
-    CornerRadius, CursorIcon, Frame, Id, Key, LayerId, Layout, NumExt, Order, Popup,
-    PopupCloseBehavior, Rect, Response, ScrollArea, Sense, Shape, Stroke, StrokeKind, TextStyle,
-    Ui, UiBuilder, Vec2, WidgetText,
+    emath::TSTransform,
+    epaint::{PathShape, PathStroke, TextShape},
+    lerp, pos2, vec2, Align, Align2, Button, Color32, CornerRadius, CursorIcon, Frame, Id, Key,
+    LayerId, Layout, NumExt, Order, Popup, PopupCloseBehavior, Pos2, Rect, Response, ScrollArea,
+    Sense, Shape, Stroke, StrokeKind, TextStyle, Ui, UiBuilder, Vec2, WidgetText,
 };
 
 use crate::dock_area::tab_removal::{ForcedRemoval, TabRemoval};
@@ -59,6 +60,11 @@ impl<Tab> DockArea<'_, Tab> {
             tab_viewer.solo_tab_no_bar(&tabs[0])
         };
 
+        // Reset per-leaf outline state; `tab_bar` opts a single-row leaf into the combined
+        // tab + body silhouette (see `body_owns_top_border`), and `tabs` records the active tab's
+        // rect that the silhouette traces.
+        self.body_owns_top_border = false;
+        self.active_tab_rect = None;
         let tabbar_rect = if hide_tab_bar {
             Rect::NOTHING
         } else {
@@ -132,6 +138,11 @@ impl<Tab> DockArea<'_, Tab> {
                 }
             }
         }
+
+        // Single row: the active tab and body are stroked as one silhouette by `tab_body` (rather
+        // than a separate tab outline + seam hline). `tabs` records the active tab's rect that the
+        // silhouette traces; `tab_title` skips that tab's own outline.
+        self.body_owns_top_border = true;
 
         let style = fade_style.unwrap_or_else(|| self.style.as_ref().unwrap());
         let (tabbar_outer_rect, tabbar_response) = ui.allocate_exact_size(
@@ -215,22 +226,15 @@ impl<Tab> DockArea<'_, Tab> {
                 state,
                 path,
                 tab_viewer,
-                tabbar_outer_rect,
                 tab_layout_fill.as_deref(),
                 fill_row_width,
                 fade_style,
                 0..tabs_len,
             );
 
-            // Draw hline from tab end to edge of tab bar.
-            let px = ui.ctx().pixels_per_point().recip();
+            // The body draws the top border itself (see `tab_body`), so no seam is painted here.
+            // Re-borrow the style after the `&mut self` tab drawing above for the buttons below.
             let style = fade_style.unwrap_or_else(|| self.style.as_ref().unwrap());
-
-            ui.painter().hline(
-                tabs_ui.min_rect().right().min(clip_rect.right())..=tabbar_outer_rect.right(),
-                tabbar_outer_rect.bottom() - px,
-                (px, style.tab_bar.hline_color),
-            );
 
             // Add button at the ends of the tab bar.
             if self.show_add_buttons {
@@ -357,7 +361,6 @@ impl<Tab> DockArea<'_, Tab> {
         state: &mut State,
         path: NodePath,
         tab_viewer: &mut impl TabViewer<Tab = Tab>,
-        tabbar_outer_rect: Rect,
         tab_layout: Option<&[(f32, f32)]>,
         fill_row_width: Option<f32>,
         fade: Option<&Style>,
@@ -546,20 +549,18 @@ impl<Tab> DockArea<'_, Tab> {
                 tab_hovered = true;
             }
 
-            // Paint hline below each tab unless its active (or option says otherwise).
+            // Record the active tab's rect so the body can trace the active tab + body as one
+            // continuous silhouette (see `tab_body`); `tab_title` correspondingly skips this tab's
+            // own outline + connector. An inactive tab — or an active tab that opts into an hline
+            // beneath its name — keeps its own outline and just sits on the body's top border.
             let leaf = self.dock_state.leaf_mut(path).unwrap();
             let tab = &mut leaf.tabs[tab_index.0];
             let style = fade.unwrap_or_else(|| self.style.as_ref().unwrap());
             let tab_style = tab_viewer.tab_style_override(tab, &style.tab);
             let tab_style = tab_style.as_ref().unwrap_or(&style.tab);
 
-            if !is_active || tab_style.hline_below_active_tab_name {
-                let px = tabs_ui.ctx().pixels_per_point().recip();
-                tabs_ui.painter().hline(
-                    response.rect.x_range(),
-                    tabbar_outer_rect.bottom() - px,
-                    (px, style.tab_bar.hline_color),
-                );
+            if is_active && !is_being_dragged && !tab_style.hline_below_active_tab_name {
+                self.active_tab_rect = Some(response.rect);
             }
 
             if response.clicked()
@@ -1080,6 +1081,22 @@ impl<Tab> DockArea<'_, Tab> {
             response = response.on_hover_cursor(CursorIcon::Grab);
         }
 
+        // In a single-row leaf the active tab merges into the body: its outline and the body's are
+        // stroked as one continuous silhouette by `tab_body`, so skip this tab's own outline and
+        // name-area connector here. A dragged tab floats free (full outline), and an active tab that
+        // opts into an hline beneath its name keeps the legacy look.
+        let merge_active = active
+            && !is_being_dragged
+            && self.body_owns_top_border
+            && !tab_style.hline_below_active_tab_name;
+        // Every docked tab is pulled down at the top by the stroke inset so its outline doesn't sit
+        // flush against the separator/row above; the fill is pulled down by the same amount (below)
+        // so fill and outline coincide — unlike the legacy per-side `rect_stroke_box` inset, which
+        // left the fill bleeding past the outline. Must match `tab_body`'s silhouette inset.
+        // (Captured before `tab_style` is narrowed to a `TabInteractionStyle` below.)
+        let tab_outline_width = tab_style.tab_body.stroke.width;
+        let tab_top_inset = (tab_outline_width / 2.0).ceil();
+
         let tab_style = if focused || is_being_dragged {
             if response.has_focus() {
                 &tab_style.focused_with_kb_focus
@@ -1100,26 +1117,56 @@ impl<Tab> DockArea<'_, Tab> {
             &tab_style.inactive
         };
 
-        // Draw the full tab first and then the stroke on top to avoid the stroke
-        // mixing with the background color.
+        // Draw the fill first, then the outline on top so the stroke doesn't mix with the fill.
+        // A floating (dragged) tab fills its whole rect; every docked tab is pulled down at the top
+        // so the fill matches the outline and leaves the separator gap above. The outline never
+        // closes across the bottom — the line below (the body's top border for a single-row leaf,
+        // or the row separator for a multi-row one) is the tab's bottom — and there is no `bg_fill`
+        // connector, which is what produced the seam under inactive tabs (worse on hover).
+        let fill_rect = if is_being_dragged {
+            tab_rect
+        } else {
+            Rect::from_min_max(
+                pos2(tab_rect.left(), tab_rect.top() + tab_top_inset),
+                tab_rect.max,
+            )
+        };
         ui.painter()
-            .rect_filled(tab_rect, tab_style.corner_radius, tab_style.bg_fill);
-        let stroke_rect = rect_stroke_box(tab_rect, 1.0);
-        ui.painter().rect_stroke(
-            stroke_rect,
-            tab_style.corner_radius,
-            Stroke::new(1.0, tab_style.outline_color),
-            StrokeKind::Inside,
-        );
-        if !is_being_dragged {
-            // Make the tab name area connect with the tab ui area.
-            ui.painter().hline(
-                RangeInclusive::new(
-                    stroke_rect.min.x + f32::max(tab_style.corner_radius.sw.into(), 1.5),
-                    stroke_rect.max.x - f32::max(tab_style.corner_radius.se.into(), 1.5),
-                ),
-                stroke_rect.bottom(),
-                Stroke::new(2.0, tab_style.bg_fill),
+            .rect_filled(fill_rect, tab_style.corner_radius, tab_style.bg_fill);
+
+        let tab_outline = Stroke::new(tab_outline_width, tab_style.outline_color);
+        if merge_active {
+            // Active tab in a single-row leaf: its outline is part of the body silhouette (drawn by
+            // `tab_body`), so nothing is stroked here.
+        } else if is_being_dragged {
+            // Floating tab: a full closed box, since it sits over nothing.
+            ui.painter().rect_stroke(
+                rect_stroke_box(tab_rect, tab_outline.width),
+                tab_style.corner_radius,
+                tab_outline,
+                StrokeKind::Inside,
+            );
+        } else if self.body_owns_top_border {
+            // Inactive tab in a single-row leaf: a rounded-top cap whose sides run all the way down
+            // to the body's top border (which `tab_body` draws under it). No bottom edge, so it
+            // meets that border in a clean T instead of doubling it.
+            let cap = build_tab_cap_outline(tab_rect, tab_style.corner_radius, tab_top_inset);
+            ui.painter().add(Shape::Path(PathShape {
+                points: cap,
+                closed: false,
+                fill: Color32::TRANSPARENT,
+                stroke: PathStroke::new(tab_outline.width, tab_outline.color)
+                    .with_kind(StrokeKind::Inside),
+            }));
+        } else {
+            // Multi-row tab: a full box whose bottom reaches the row separator below it (drawn by
+            // `tab_bar_multi_row`), so the sides run the whole way down and the fill stays flush
+            // with the outline.
+            ui.painter().rect_stroke(
+                fill_rect,
+                tab_style.corner_radius,
+                tab_outline,
+                StrokeKind::Inside,
             );
         }
 
@@ -1313,19 +1360,21 @@ impl<Tab> DockArea<'_, Tab> {
                 state,
                 path,
                 tab_viewer,
-                row_rect,
                 Some(tab_layout),
                 Some(inner_width),
                 fade_style,
                 range.clone(),
             );
 
-            let px = ui.ctx().pixels_per_point().recip();
+            // The row separator doubles as the body's top border for the last row, so draw it at the
+            // body stroke width (matching the body sides and the tabs' outlines) and align it with
+            // the tabs' bottom edges (`StrokeKind::Inside` sits the stroke just inside the bottom).
             let style = fade_style.unwrap_or_else(|| self.style.as_ref().unwrap());
+            let sep_width = style.tab.tab_body.stroke.width;
             ui.painter().hline(
                 row_rect.x_range(),
-                row_rect.bottom() - px,
-                (px, style.tab_bar.hline_color),
+                row_rect.bottom() - sep_width / 2.0,
+                Stroke::new(sep_width, style.tab_bar.hline_color),
             );
         }
 
@@ -1483,6 +1532,11 @@ impl<Tab> DockArea<'_, Tab> {
         let (body_rect, _body_response) =
             ui.allocate_exact_size(ui.available_size_before_wrap(), Sense::hover());
 
+        // Captured before borrowing the leaf below (see `tab_bar`/`tabs`): whether the active tab
+        // and body are stroked as one silhouette, and the active tab's rect that it traces.
+        let body_owns_top = self.body_owns_top_border;
+        let active_rect = self.active_tab_rect;
+
         let leaf = self
             .dock_state
             .leaf_mut(path)
@@ -1548,20 +1602,69 @@ impl<Tab> DockArea<'_, Tab> {
                 // Use initial spacing for ui.
                 ui.spacing_mut().item_spacing = spacing;
 
-                // Offset the background rectangle up to hide the top border behind the clip rect.
-                // To avoid anti-aliasing lines when the stroke width is not divisible by two, we
-                // need to calculate the effective anti-aliased stroke width.
-                let effective_stroke_width = (tabs_style.tab_body.stroke.width / 2.0).ceil() * 2.0;
-                let tab_body_rect = Rect::from_min_max(
-                    ui.clip_rect().min - vec2(0.0, effective_stroke_width),
-                    ui.clip_rect().max,
-                );
-                ui.painter().rect_stroke(
-                    rect_stroke_box(tab_body_rect, tabs_style.tab_body.stroke.width),
-                    tab_body_corner_radius,
-                    tabs_style.tab_body.stroke,
-                    StrokeKind::Inside,
-                );
+                let stroke = tabs_style.tab_body.stroke;
+                if body_owns_top {
+                    // Single-row leaf: stroke the active tab and the body as ONE continuous
+                    // silhouette. Their interiors are already filled with the same colour (the tab's
+                    // fill in `tab_title`, the body's fill above), so the union reads as a single
+                    // shape; tracing one outline around it removes the seam between tab and content
+                    // and avoids the stroke-meets-stroke corner over-fill and misaligned hairlines
+                    // that independent tab / seam / body strokes produce at fractional DPI.
+                    // `tab_title` skips the active tab's own outline + connector for this reason.
+                    match active_rect {
+                        Some(tab_rect) => {
+                            let outline = build_leaf_outline(
+                                tab_rect,
+                                body_rect,
+                                tabs_style.active.corner_radius,
+                                tab_body_corner_radius,
+                                (stroke.width / 2.0).ceil(),
+                            );
+                            // Clip to the whole leaf (not just the body) so the tab top, which sits
+                            // above the body, isn't clipped; appended after the fills in this layer,
+                            // so the outline sits on top of them.
+                            let painter =
+                                ui.ctx().layer_painter(ui.layer_id()).with_clip_rect(*rect);
+                            painter.add(Shape::Path(PathShape {
+                                points: outline,
+                                closed: true,
+                                fill: Color32::TRANSPARENT,
+                                stroke: PathStroke::new(stroke.width, stroke.color)
+                                    .with_kind(StrokeKind::Inside),
+                            }));
+                        }
+                        None => {
+                            // No active tab rect was recorded — e.g. the active tab is being
+                            // dragged out, so it floats free and nothing merges into the body.
+                            // Give the body its own full (flush) border.
+                            ui.painter().rect_stroke(
+                                body_rect,
+                                tab_body_corner_radius,
+                                stroke,
+                                StrokeKind::Inside,
+                            );
+                        }
+                    }
+                } else {
+                    // Multi-row (or no tab bar): the body's top edge is the last tab row's separator
+                    // (drawn by `tab_bar_multi_row` at the body stroke width, so it matches these
+                    // sides), so push the body's own top edge above the clip to hide it and avoid
+                    // doubling. `effective_stroke_width` is the AA-rounded width so a fractional
+                    // stroke still clears the clip cleanly. The sides and bottom are stroked flush on
+                    // the rect boundary — outline coincident with the fill, like the single-row body,
+                    // with no `rect_stroke_box` inset bleeding the fill past the outline.
+                    let effective_stroke_width = (stroke.width / 2.0).ceil() * 2.0;
+                    let tab_body_rect = Rect::from_min_max(
+                        ui.clip_rect().min - vec2(0.0, effective_stroke_width),
+                        ui.clip_rect().max,
+                    );
+                    ui.painter().rect_stroke(
+                        tab_body_rect,
+                        tab_body_corner_radius,
+                        stroke,
+                        StrokeKind::Inside,
+                    );
+                }
 
                 ScrollArea::new(tab_viewer.scroll_bars(tab)).show(ui, |ui| {
                     Frame::new()
@@ -1630,6 +1733,125 @@ impl<Tab> DockArea<'_, Tab> {
                 });
             }
         }
+    }
+}
+
+/// Builds the closed, clockwise outline of the union of the active tab and the body: a body
+/// rectangle with the active tab protruding from its top edge. Tab-top corners are rounded by
+/// `tab_cr.nw`/`ne` and body-bottom corners by `body_cr.sw`/`se`; the body's own top corners are
+/// square (the tab bar sits above). Stroked as one path, this removes the seam between tab and
+/// content and any stroke-meets-stroke corner over-fill.
+///
+/// Wound clockwise so that `StrokeKind::Inside` paints the stroke on the interior side (egui only
+/// auto-corrects winding for filled paths, not stroke-only ones).
+///
+/// The tab's top edge is pulled down by `inset` so the tab sits below the tab-bar separator with a
+/// gap rather than flush against it; the tab fill in `tab_title` is pulled down by the same amount
+/// so fill and outline coincide. Every other edge stays on the rect boundary — outline flush with
+/// the fill, like the rest of egui's content (the old per-side `rect_stroke_box` inset, which left
+/// the fill bleeding past the outline, is deliberately not reproduced). The seam stays on the true
+/// tab/body boundary.
+fn build_leaf_outline(
+    tab_rect: Rect,
+    body_rect: Rect,
+    tab_cr: CornerRadius,
+    body_cr: CornerRadius,
+    inset: f32,
+) -> Vec<Pos2> {
+    use std::f32::consts::PI;
+
+    let seam_y = body_rect.top(); // == tab_rect.bottom(): the tab/body boundary
+    let (tl, tr) = (tab_rect.left(), tab_rect.right());
+    let (bl, br) = (body_rect.left(), body_rect.right());
+    let tab_top = tab_rect.top() + inset;
+    let body_bottom = body_rect.bottom();
+
+    // Clamp radii so opposing arcs on a short/narrow edge can't overlap.
+    let half_tab_w = tab_rect.width() * 0.5;
+    let half_body_w = body_rect.width() * 0.5;
+    let body_h = body_bottom - seam_y;
+    let r_tnw = (tab_cr.nw as f32).clamp(0.0, half_tab_w);
+    let r_tne = (tab_cr.ne as f32).clamp(0.0, half_tab_w);
+    let r_bsw = (body_cr.sw as f32).clamp(0.0, half_body_w.min(body_h));
+    let r_bse = (body_cr.se as f32).clamp(0.0, half_body_w.min(body_h));
+
+    let mut p = Vec::new();
+    // Clockwise from the tab's top-left, closing back up the tab's left side.
+    push_corner_arc(
+        &mut p,
+        pos2(tl + r_tnw, tab_top + r_tnw),
+        r_tnw,
+        PI,
+        1.5 * PI,
+    ); // tab NW
+    push_corner_arc(
+        &mut p,
+        pos2(tr - r_tne, tab_top + r_tne),
+        r_tne,
+        1.5 * PI,
+        2.0 * PI,
+    ); // tab NE
+    p.push(pos2(tr, seam_y)); // tab right side meets body top (concave)
+    p.push(pos2(br, seam_y)); // body top-right (square)
+    push_corner_arc(
+        &mut p,
+        pos2(br - r_bse, body_bottom - r_bse),
+        r_bse,
+        0.0,
+        0.5 * PI,
+    ); // body SE
+    push_corner_arc(
+        &mut p,
+        pos2(bl + r_bsw, body_bottom - r_bsw),
+        r_bsw,
+        0.5 * PI,
+        PI,
+    ); // body SW
+    p.push(pos2(bl, seam_y)); // body top-left (square)
+    p.push(pos2(tl, seam_y)); // body top meets tab left side (concave)
+    p
+}
+
+/// Builds the OPEN outline (a rounded-top cap) of an inactive tab in a single-row leaf: up the left
+/// side, around the rounded top (`cr.nw`/`ne`), and down the right side. There is no bottom edge —
+/// the body's top border, drawn under the tab by [`DockArea::tab_body`], is the tab's bottom, so the
+/// sides meet it in a clean T rather than doubling it. The top is pulled down by `inset` to match
+/// the tab fill (see `tab_title`); the sides stay flush on the rect boundary and run to the seam.
+fn build_tab_cap_outline(tab_rect: Rect, cr: CornerRadius, inset: f32) -> Vec<Pos2> {
+    use std::f32::consts::PI;
+
+    let (l, r) = (tab_rect.left(), tab_rect.right());
+    let top = tab_rect.top() + inset;
+    let bottom = tab_rect.bottom();
+    let half_w = tab_rect.width() * 0.5;
+    let r_nw = (cr.nw as f32).clamp(0.0, half_w);
+    let r_ne = (cr.ne as f32).clamp(0.0, half_w);
+
+    let mut p = Vec::new();
+    p.push(pos2(l, bottom)); // bottom of the left side
+    push_corner_arc(&mut p, pos2(l + r_nw, top + r_nw), r_nw, PI, 1.5 * PI); // NW
+    push_corner_arc(&mut p, pos2(r - r_ne, top + r_ne), r_ne, 1.5 * PI, 2.0 * PI); // NE
+    p.push(pos2(r, bottom)); // bottom of the right side
+    p
+}
+
+/// Appends points approximating a quarter-circle arc from `from` to `to` (radians) centred at
+/// `center` with `radius`, used to round the corners traced by [`build_leaf_outline`] and
+/// [`build_tab_cap_outline`]. A zero radius yields the single corner point (which equals `center`),
+/// making a square corner.
+fn push_corner_arc(points: &mut Vec<Pos2>, center: Pos2, radius: f32, from: f32, to: f32) {
+    if radius <= 0.0 {
+        points.push(center);
+        return;
+    }
+    let segments = (radius * 0.75).clamp(3.0, 24.0).ceil() as usize;
+    for i in 0..=segments {
+        let t = i as f32 / segments as f32;
+        let a = from + (to - from) * t;
+        points.push(pos2(
+            center.x + radius * a.cos(),
+            center.y + radius * a.sin(),
+        ));
     }
 }
 
