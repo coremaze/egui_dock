@@ -505,6 +505,11 @@ impl<Tab> DockArea<'_, Tab> {
             ]
             if let Node::orientation(split) = &mut self.dock_state[path.surface][path.node] {
                 let rect = split.rect;
+                // The layout (see the sibling function above) snaps the split rect to whole pixels
+                // with `expand_to_pixel` and derives the boundary from THAT extent. Drag math below
+                // must use the same extent, otherwise the fraction↔`fixed.points` round-trip drifts
+                // every frame at fractional DPI (the fixed child shrinks while you hold the drag).
+                let exp_rect = expand_to_pixel(rect, pixels_per_point);
                 let mut separator = rect;
 
                 let midpoint = rect.min.dim_point + rect.dim_size() * split.fraction;
@@ -572,7 +577,7 @@ impl<Tab> DockArea<'_, Tab> {
                 // Update 'fraction' interaction after drawing separator,
                 // otherwise it may overlap on other separator / bodies when
                 // shrunk fast.
-                let range = rect.max.dim_point - rect.min.dim_point;
+                let range = exp_rect.max.dim_point - exp_rect.min.dim_point;
                 if range > 0.0 {
                     let min = (style.separator.extra / range).min(1.0);
                     let max = 1.0 - min;
@@ -591,7 +596,7 @@ impl<Tab> DockArea<'_, Tab> {
                 // `SplitNode::fixed`.
                 if response.dragged() || response.double_clicked() || arrow_key_offset.is_some() {
                     if let Some(fixed) = &mut split.fixed {
-                        let range = rect.max.dim_point - rect.min.dim_point;
+                        let range = exp_rect.max.dim_point - exp_rect.min.dim_point;
                         if range > 0.0 {
                             let child_fraction = match fixed.child {
                                 FixedChild::First => split.fraction,
