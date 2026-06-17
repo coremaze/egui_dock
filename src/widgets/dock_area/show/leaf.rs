@@ -1197,15 +1197,20 @@ impl<Tab> DockArea<'_, Tab> {
             };
 
             if close_response.hovered() || close_response.has_focus() {
-                let mut corner_radius = tab_style.corner_radius;
-                corner_radius.nw = 0;
-                corner_radius.sw = 0;
-
-                ui.painter().rect_filled(
-                    close_button_rect,
-                    corner_radius,
-                    style.buttons.close_tab_bg_fill,
-                );
+                // A circular highlight centered on the X. The old square fill spanned the full
+                // tab height and width, so it bled above the inset fill (into the separator gap)
+                // and under the side outline. The circle hugs the glyph with a little padding,
+                // then is clamped to the tab interior so it can never reach past the inset fill
+                // top, the body border below, or the side outline.
+                let center = close_button_rect.center();
+                let max_radius = (center.y - (tab_rect.top() + tab_top_inset))
+                    .min(tab_rect.bottom() - center.y)
+                    .min(tab_rect.right() - tab_outline_width - center.x);
+                let radius = (Style::TAB_CLOSE_X_SIZE * std::f32::consts::FRAC_1_SQRT_2 + 3.0)
+                    .min(max_radius)
+                    .max(0.0);
+                ui.painter()
+                    .circle_filled(center, radius, style.buttons.close_tab_bg_fill);
             }
 
             let mut x_rect = close_button_rect;
