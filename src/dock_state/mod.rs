@@ -41,6 +41,11 @@ pub struct DockState<Tab> {
     focused_surface: Option<SurfaceIndex>, // Part of the tree which is in focus.
 
     /// Contains translations of text shown in [`DockArea`](crate::DockArea).
+    ///
+    /// Not serialized: these are application-provided UI strings, so a restored
+    /// [`DockState`] takes the running build's translations rather than pinning
+    /// whatever was current when it was saved.
+    #[cfg_attr(feature = "serde", serde(skip, default = "Translations::english"))]
     pub translations: Translations,
 }
 

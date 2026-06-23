@@ -1,5 +1,13 @@
 use egui::Rect;
 
+/// Default for a skipped, serialized layout [`Rect`]: an un-laid-out sentinel
+/// that the next layout pass overwrites. Layout rects are transient and not
+/// persisted (see the `serde(skip)` on [`SplitNode::rect`]).
+#[cfg(feature = "serde")]
+fn rect_unset() -> Rect {
+    Rect::NOTHING
+}
+
 /// Identifies which child of a split [`Node`](crate::Node) a constraint applies
 /// to.
 ///
@@ -54,6 +62,9 @@ impl FixedSize {
 #[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
 pub struct SplitNode {
     /// The rectangle in which all children of this node are drawn.
+    ///
+    /// Transient layout state, recomputed every layout pass; not serialized.
+    #[cfg_attr(feature = "serde", serde(skip, default = "rect_unset"))]
     pub rect: Rect,
 
     /// The fraction taken by the top child of this node.

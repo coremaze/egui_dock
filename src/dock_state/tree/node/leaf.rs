@@ -4,14 +4,28 @@ use egui::Rect;
 
 use crate::{Error, Result, TabIndex};
 
+/// Default for a skipped, serialized layout [`Rect`]: an un-laid-out sentinel
+/// that the next layout pass overwrites. Layout rects are transient and not
+/// persisted (see the `serde(skip)` on [`LeafNode::rect`]/[`LeafNode::viewport`]).
+#[cfg(feature = "serde")]
+fn rect_unset() -> Rect {
+    Rect::NOTHING
+}
+
 /// The inner data of a [``Node::Leaf``](crate::Node), which contains tabs and can be collapsed.
 #[derive(Clone, Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
 pub struct LeafNode<Tab> {
     /// The full rectangle - tab bar plus tab body.
+    ///
+    /// Transient layout state, recomputed every layout pass; not serialized.
+    #[cfg_attr(feature = "serde", serde(skip, default = "rect_unset"))]
     pub rect: Rect,
 
     /// The tab body rectangle.
+    ///
+    /// Transient layout state, recomputed every layout pass; not serialized.
+    #[cfg_attr(feature = "serde", serde(skip, default = "rect_unset"))]
     pub viewport: Rect,
 
     /// All the tabs in this node.
