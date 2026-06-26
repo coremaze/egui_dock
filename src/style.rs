@@ -182,6 +182,14 @@ pub struct TabBarStyle {
     /// Whether tab titles expand to fill the width of their tab bars.
     /// By `Default` it's `false`.
     pub fill_tab_bar: bool,
+
+    /// Height of the blank drag strip placed above wrapped tab rows in multi-row mode
+    /// (see [`DockArea::multi_row_tabs`]), as a fraction of [`TabBarStyle::height`]. The
+    /// strip is the node group's drag handle. By `Default` it's `0.5` (half a tab row);
+    /// `1.0` makes it a full tab row tall. Negative values are treated as `0.0`.
+    ///
+    /// [`DockArea::multi_row_tabs`]: crate::DockArea::multi_row_tabs
+    pub multi_row_drag_strip_height_factor: f32,
 }
 
 /// Specifies the look and feel of an individual tab.
@@ -423,6 +431,7 @@ impl Default for TabBarStyle {
             corner_radius: CornerRadius::default(),
             hline_color: Color32::BLACK,
             fill_tab_bar: false,
+            multi_row_drag_strip_height_factor: 0.5,
         }
     }
 }

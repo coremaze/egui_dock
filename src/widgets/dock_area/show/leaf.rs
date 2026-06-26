@@ -1244,8 +1244,12 @@ impl<Tab> DockArea<'_, Tab> {
     ) -> Rect {
         let style = fade_style.unwrap_or_else(|| self.style.as_ref().unwrap());
         let row_height = style.tab_bar.height;
+        // The blank strip above the tab rows is the node group's drag handle. It only has to be
+        // grabbable, so by default it is half a tab row tall (reclaiming vertical space above
+        // multi-row leaves); `multi_row_drag_strip_height_factor` tunes that fraction.
+        let strip_height = (row_height * style.tab_bar.multi_row_drag_strip_height_factor).max(0.0);
         let rows = row_ranges.len();
-        let total_height = row_height * (rows as f32 + 1.0);
+        let total_height = strip_height + row_height * rows as f32;
 
         let (outer_rect, _) = ui.allocate_exact_size(
             vec2(ui.available_width().max(0.0), total_height.max(0.0)),
@@ -1347,7 +1351,7 @@ impl<Tab> DockArea<'_, Tab> {
 
         // Tab rows below the drag strip.
         for (row_idx, range) in row_ranges.iter().enumerate() {
-            let row_top = inner_rect.min.y + row_height * (row_idx as f32 + 1.0);
+            let row_top = inner_rect.min.y + strip_height + row_height * row_idx as f32;
             let row_rect = Rect::from_min_size(
                 pos2(inner_rect.min.x, row_top),
                 vec2(inner_width, row_height),

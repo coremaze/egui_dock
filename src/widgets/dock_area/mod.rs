@@ -148,9 +148,12 @@ impl<'tree, Tab> DockArea<'tree, Tab> {
     }
 
     /// When enabled, a leaf whose tabs would overflow into a scroll bar instead wraps
-    /// tabs onto multiple rows. A blank drag strip (same height as one tab row) is placed
-    /// above the tab rows and acts as the node group drag handle.
+    /// tabs onto multiple rows. A blank drag strip is placed above the tab rows and acts as
+    /// the node group drag handle; its height is a fraction of a tab row set by
+    /// [`TabBarStyle::multi_row_drag_strip_height_factor`] (half by default).
     /// By default it's `false`.
+    ///
+    /// [`TabBarStyle::multi_row_drag_strip_height_factor`]: crate::TabBarStyle::multi_row_drag_strip_height_factor
     pub fn multi_row_tabs(mut self, multi_row_tabs: bool) -> Self {
         self.multi_row_tabs = multi_row_tabs;
         self
