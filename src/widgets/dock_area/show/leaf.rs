@@ -1655,16 +1655,25 @@ impl<Tab> DockArea<'_, Tab> {
                         }
                     }
                 } else {
-                    // Multi-row (or no tab bar): the body's top edge is the last tab row's separator
+                    // Multi-row: the body's top edge is the last tab row's separator
                     // (drawn by `tab_bar_multi_row` at the body stroke width, so it matches these
                     // sides), so push the body's own top edge above the clip to hide it and avoid
                     // doubling. `effective_stroke_width` is the AA-rounded width so a fractional
                     // stroke still clears the clip cleanly. The sides and bottom are stroked flush on
                     // the rect boundary — outline coincident with the fill, like the single-row body,
                     // with no `rect_stroke_box` inset bleeding the fill past the outline.
-                    let effective_stroke_width = (stroke.width / 2.0).ceil() * 2.0;
+                    //
+                    // With NO tab bar at all (`TabViewer::solo_tab_no_bar`) there is no separator
+                    // above the body, so hiding its top edge would leave a three-sided frame — the
+                    // open top reads as a larger top margin around the solo tab's content. Keep the
+                    // top edge inside the clip and stroke all four sides.
+                    let top_offset = if tabbar_rect == Rect::NOTHING {
+                        0.0
+                    } else {
+                        (stroke.width / 2.0).ceil() * 2.0
+                    };
                     let tab_body_rect = Rect::from_min_max(
-                        ui.clip_rect().min - vec2(0.0, effective_stroke_width),
+                        ui.clip_rect().min - vec2(0.0, top_offset),
                         ui.clip_rect().max,
                     );
                     ui.painter().rect_stroke(
