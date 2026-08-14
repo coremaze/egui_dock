@@ -41,15 +41,33 @@ pub struct FixedSize {
 
 impl FixedSize {
     /// The top/left [`fraction`](SplitNode::fraction) that gives the fixed child
-    /// `self.points` points when the split axis spans `extent` points.
+    /// `self.points` points when the split axis spans `extent` points, while
+    /// leaving each child at least `min_child` points.
+    ///
+    /// The minimum matters when the split shrinks below the fixed child's size:
+    /// without it the flexible sibling would be squeezed to nothing (the drag
+    /// path already prevents this via
+    /// [`SeparatorStyle::extra`](crate::SeparatorStyle), but a window resize
+    /// bypasses dragging entirely — pass that same style value here so the two
+    /// paths agree). The stored `self.points` is never modified: it is the
+    /// preferred size, honored again as soon as the extent can fit it.
+    ///
+    /// The clamp is built exactly like the separator drag's: when
+    /// `extent < 2 * min_child` the swapped bounds relax the guarantee
+    /// continuously (each child keeps `extent - min_child` points) instead of
+    /// inverting the range, and an extent below `min_child` is unconstrained.
+    /// A non-positive `min_child` reduces to the plain `0..=1` clamp.
     ///
     /// Returns `0.5` for a degenerate (non-positive) extent, matching the
     /// fallback used elsewhere for empty splits.
-    pub fn fraction_for(self, extent: f32) -> f32 {
+    pub fn fraction_for(self, extent: f32, min_child: f32) -> f32 {
         if extent <= 0.0 {
             return 0.5;
         }
-        let child_fraction = (self.points / extent).clamp(0.0, 1.0);
+        let min = (min_child / extent).clamp(0.0, 1.0);
+        let max = 1.0 - min;
+        let (min, max) = (min.min(max), max.max(min));
+        let child_fraction = (self.points / extent).clamp(min, max);
         match self.child {
             FixedChild::First => child_fraction,
             FixedChild::Second => 1.0 - child_fraction,

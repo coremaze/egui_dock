@@ -449,10 +449,13 @@ impl<Tab> DockArea<'_, Tab> {
                 let dim_size = rect.dim_size();
                 // A fixed-size child keeps a constant pixel size as the split
                 // resizes: re-derive the fraction from it for this extent before
-                // it drives the layout. See `SplitNode::fixed`.
+                // it drives the layout. The minimum is the same one the
+                // separator drag enforces (`separator.extra`), so a shrinking
+                // window makes the fixed child yield rather than squeezing its
+                // flexible sibling out of view. See `SplitNode::fixed`.
                 if dim_size > 0.0 {
                     if let Some(fixed) = split.fixed {
-                        split.fraction = fixed.fraction_for(dim_size);
+                        split.fraction = fixed.fraction_for(dim_size, style.separator.extra);
                     }
                 }
                 let midpoint = if dim_size > 0.0 {
